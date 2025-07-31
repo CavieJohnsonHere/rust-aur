@@ -1,0 +1,250 @@
+// main.rs - Simple AUR Helper
+use clap::{Arg, Command};
+use reqwest::blocking::get;
+use serde::Deserialize;
+use std::error::Error;
+use std::fs;
+use std::io::{self, Write};
+use std::process::{Command as Shell, Stdio};
+
+const AUR_RPC: &str = "https://aur.archlinux.org/rpc/?v=5&";
+
+// API response structures
+#[derive(Deserialize)]
+struct RpcResponse {
+    results: Vec<AurPkg>,
+}
+
+#[derive(Deserialize, Clone)]
+struct AurPkg {
+    #[serde(rename = "Name")]
+    name: String,
+    #[serde(rename = "Version")]
+    version: Option<String>,
+    #[serde(rename = "Description")]
+    description: Option<String>,
+    #[serde(rename = "Popularity")]
+    popularity: Option<f32>,
+    #[serde(rename = "Maintainer")]
+    maintainer: Option<String>,
+    #[serde(rename = "Depends")]
+    #[serde(default)]
+    depends: Vec<String>,
+    #[serde(rename = "MakeDepends")]
+    #[serde(default)]
+    make_depends: Vec<String>,
+}
+
+// User prompt helpers
+fn prompt_yes(question: &str) -> bool {
+    print!("{} [Y/n] ", question);
+    io::stdout().flush().unwrap();
+    
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).unwrap();
+    let resp = input.trim().to_lowercase();
+    resp.is_empty() || resp == "y" || resp == "yes"
+}
+
+// AUR API functions
+fn fetch_search(term: &str) -> Result<Vec<AurPkg>, Box<dyn Error>> {
+    let url = format!("{}type=search&arg={}", AUR_RPC, term);
+    let resp: RpcResponse = get(&url)?.json()?;
+    
+    let mut packages = resp.results;
+    packages.sort_by(|a, b| {
+        b.popularity
+            .unwrap_or(0.0)
+            .partial_cmp(&a.popularity.unwrap_or(0.0))
+            .unwrap()
+    });
+    Ok(packages)
+}
+
+fn fetch_info(name: &str) -> Result<AurPkg, Box<dyn Error>> {
+    let url = format!("{}type=info&arg={}", AUR_RPC, name);
+    let resp: RpcResponse = get(&url)?.json()?;
+    
+    resp.results
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("Package '{}' not found", name).into())
+}
+
+// Command implementations
+fn cmd_search(term: &str) -> Result<(), Box<dyn Error>> {
+    let packages = fetch_search(term)?;
+    
+    println!("\nFound {} packages:", packages.len());
+    for pkg in packages {
+        println!("\n{} {}", pkg.name, pkg.version.as_deref().unwrap_or(""));
+        if let Some(desc) = &pkg.description {
+            println!("  {}", desc);
+        }
+        println!("  Popularity: {:.2}", pkg.popularity.unwrap_or(0.0));
+    }
+    Ok(())
+}
+
+fn cmd_install(pkgs: &[String]) -> Result<(), Box<dyn Error>> {
+    for pkg_name in pkgs {
+        let pkg = fetch_info(pkg_name)?;
+        println!("\nInstalling: {} {}", pkg.name, pkg.version.as_deref().unwrap_or(""));
+        
+        if !prompt_yes("Proceed?") {
+            println!("Skipping {}", pkg.name);
+            continue;
+        }
+        
+        // Clone package
+        let repo_url = format!("https://aur.archlinux.org/{}.git", pkg.name);
+        Shell::new("git")
+            .arg("clone")
+            .arg(&repo_url)
+            .status()?;
+        
+        // Build options
+        let remove_deps = prompt_yes("Remove make dependencies after build?");
+        let mut args = vec!["-si", "--noconfirm"];
+        if remove_deps {
+            args.push("--rmdeps");
+        }
+        
+        // Build and install
+        let status = Shell::new("makepkg")
+            .args(args)
+            .current_dir(&pkg.name)
+            .status()?;
+        
+        // Cleanup
+        fs::remove_dir_all(&pkg.name)?;
+        
+        if status.success() {
+            println!("Successfully installed {}", pkg.name);
+        } else {
+            eprintln!("Failed to install {}", pkg.name);
+        }
+    }
+    Ok(())
+}
+
+fn cmd_update() -> Result<(), Box<dyn Error>> {
+    println!("Updating AUR packages...");
+    
+    // Get installed AUR packages
+    let output = Shell::new("pacman")
+        .arg("-Qm")
+        .output()?;
+    
+    let aur_pkgs = String::from_utf8_lossy(&output.stdout);
+    let pkgs_to_update: Vec<String> = aur_pkgs
+        .lines()
+        .filter_map(|line| line.split_whitespace().next().map(String::from))
+        .collect();
+    
+    if pkgs_to_update.is_empty() {
+        println!("No AUR packages installed");
+        return Ok(());
+    }
+    
+    println!("Found {} packages to update", pkgs_to_update.len());
+    cmd_install(&pkgs_to_update)
+}
+
+fn cmd_info(pkg_name: &str) -> Result<(), Box<dyn Error>> {
+    let pkg = fetch_info(pkg_name)?;
+    
+    println!("\nPackage: {}", pkg.name);
+    println!("Version: {}", pkg.version.as_deref().unwrap_or("Unknown"));
+    println!("Maintainer: {}", pkg.maintainer.as_deref().unwrap_or("None"));
+    println!("Popularity: {:.2}", pkg.popularity.unwrap_or(0.0));
+    
+    if !pkg.description.as_ref().map_or(true, |s| s.is_empty()) {
+        println!("\nDescription:\n  {}", pkg.description.unwrap());
+    }
+    
+    if !pkg.depends.is_empty() {
+        println!("\nDependencies:");
+        for dep in &pkg.depends {
+            println!("  - {}", dep);
+        }
+    }
+    
+    if !pkg.make_depends.is_empty() {
+        println!("\nBuild Dependencies:");
+        for dep in &pkg.make_depends {
+            println!("  - {}", dep);
+        }
+    }
+    Ok(())
+}
+
+fn cmd_clean() -> Result<(), Box<dyn Error>> {
+    println!("Cleaning build directories...");
+    
+    for entry in fs::read_dir(".")? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        
+        let dir_name = entry.file_name().into_string().unwrap();
+        let pkgbuild_path = format!("{}/PKGBUILD", dir_name);
+        
+        if fs::metadata(pkgbuild_path).is_ok() {
+            fs::remove_dir_all(&dir_name)?;
+            println!("Removed: {}", dir_name);
+        }
+    }
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let matches = Command::new("raur")
+        .version("1.0")
+        .about("Simple AUR Helper")
+        .subcommand_required(true)
+        .subcommand(
+            Command::new("search")
+                .about("Search AUR packages")
+                .arg(Arg::new("query").required(true)),
+        )
+        .subcommand(
+            Command::new("install")
+                .about("Install AUR packages")
+                .arg(Arg::new("packages").required(true).num_args(1..)),
+        )
+        .subcommand(Command::new("update").about("Update installed AUR packages"))
+        .subcommand(
+            Command::new("info")
+                .about("Show package information")
+                .arg(Arg::new("package").required(true)),
+        )
+        .subcommand(Command::new("clean").about("Clean build directories"))
+        .get_matches();
+    
+    match matches.subcommand() {
+        Some(("search", sub_m)) => {
+            cmd_search(sub_m.get_one::<String>("query").unwrap())?;
+        }
+        Some(("install", sub_m)) => {
+            let packages: Vec<String> = sub_m
+                .get_many::<String>("packages")
+                .unwrap()
+                .cloned()
+                .collect();
+            cmd_install(&packages)?;
+        }
+        Some(("update", _)) => {
+            cmd_update()?;
+        }
+        Some(("info", sub_m)) => {
+            cmd_info(sub_m.get_one::<String>("package").unwrap())?;
+        }
+        Some(("clean", _)) => {
+            cmd_clean()?;
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
