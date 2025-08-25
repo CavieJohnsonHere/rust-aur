@@ -28,4 +28,9 @@ To build this project, run:
 cargo install path ./the/path/to/project's/root
 ```
 
-The binaries are available inside `./target/release`. You may have to add `~/.cargo/bin` to your PATH to run this program from everywhere.
+Or, using the github aur mirror (recommended, fetches all dependencies automatically):
+```bash
+ git clone --single-branch --branch raur-helper-git https://github.com/archlinux/aur.git raur-helper-git
+ cd raur-helper-git
+ makepkg -si
+```
