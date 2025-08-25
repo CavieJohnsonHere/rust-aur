@@ -1,13 +1,14 @@
-// main.rs - Simple AUR Helper
-use clap::{Arg, Command};
+// main.rs - Simple AUR Helper (fixed: --github flag as boolean)
+use clap::{Arg, ArgAction, Command};
 use reqwest::blocking::get;
 use serde::Deserialize;
 use std::error::Error;
 use std::fs;
 use std::io::{self, Write};
-use std::process::{Command as Shell, Stdio};
+use std::process::Command as Shell;
 
 const AUR_RPC: &str = "https://aur.archlinux.org/rpc/?v=5&";
+const GITHUB_AUR_MIRROR: &str = "https://github.com/archlinux/aur.git";
 
 // API response structures
 #[derive(Deserialize)]
@@ -71,8 +72,53 @@ fn fetch_info(name: &str) -> Result<AurPkg, Box<dyn Error>> {
         .ok_or_else(|| format!("Package '{}' not found", name).into())
 }
 
-// Command implementations
-fn cmd_search(term: &str) -> Result<(), Box<dyn Error>> {
+// --- GitHub mirror helpers ---
+// fetch branch names from the github aur mirror. each branch == package name
+fn fetch_github_packages() -> Result<Vec<String>, Box<dyn Error>> {
+    let output = Shell::new("git")
+        .arg("ls-remote")
+        .arg("--heads")
+        .arg(GITHUB_AUR_MIRROR)
+        .output()?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "git ls-remote failed with status: {}",
+            output.status
+        )
+        .into());
+    }
+
+    let data = String::from_utf8_lossy(&output.stdout);
+    let packages = data
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(1))
+        .map(|s| s.strip_prefix("refs/heads/").unwrap_or(s).to_string())
+        .collect();
+    Ok(packages)
+}
+
+// check if a package exists on github mirror
+fn github_package_exists(pkg: &str, list: &[String]) -> bool {
+    list.contains(&pkg.to_string())
+}
+
+// --- Command implementations (with github support) ---
+
+fn cmd_search(term: &str, use_github: bool) -> Result<(), Box<dyn Error>> {
+    if use_github {
+        println!("searching github mirror for '{}'", term);
+        let branches = fetch_github_packages()?;
+        let mut matches: Vec<&String> = branches.iter().filter(|b| b.contains(term)).collect();
+        matches.sort();
+        println!("\nFound {} packages (github mirror):", matches.len());
+        for pkg in matches {
+            println!("\n{}", pkg);
+        }
+        return Ok(());
+    }
+
+    // default rpc search
     let packages = fetch_search(term)?;
 
     println!("\nFound {} packages:", packages.len());
@@ -86,55 +132,118 @@ fn cmd_search(term: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn cmd_install(pkgs: &[String]) -> Result<(), Box<dyn Error>> {
+fn cmd_install(pkgs: &[String], use_github: bool) -> Result<(), Box<dyn Error>> {
+    let github_list = if use_github {
+        Some(fetch_github_packages()?)
+    } else {
+        None
+    };
+
     for pkg_name in pkgs {
-        let pkg = fetch_info(pkg_name)?;
-        println!("\nInstalling: {} {}", pkg.name, pkg.version.as_deref().unwrap_or(""));
+        if use_github {
+            // github flow
+            if !github_package_exists(pkg_name, github_list.as_ref().unwrap()) {
+                eprintln!("package '{}' not found on github mirror, skipping 😕", pkg_name);
+                continue;
+            }
 
-        if !prompt_yes("Proceed?") {
-            println!("Skipping {}", pkg.name);
-            continue;
-        }
+            println!("\nInstalling from github mirror: {}", pkg_name);
 
-        // Clone package
-        let repo_url = format!("https://aur.archlinux.org/{}.git", pkg.name);
-        Shell::new("git")
-            .arg("clone")
-            .arg(&repo_url)
-            .status()?;
+            if !prompt_yes("Proceed?") {
+                println!("Skipping {}", pkg_name);
+                continue;
+            }
 
-        // Build options
-        let remove_deps = prompt_yes("Remove make dependencies after build?");
-        let mut args = vec!["-si", "--noconfirm"];
-        if remove_deps {
-            args.push("--rmdeps");
-        }
+            let status = Shell::new("git")
+                .arg("clone")
+                .arg("--single-branch")
+                .arg("--branch")
+                .arg(pkg_name)
+                .arg(GITHUB_AUR_MIRROR)
+                .arg(pkg_name) // clone into folder named after package
+                .status()?;
 
-        // Build and install
-        let status = Shell::new("makepkg")
-            .args(&args)
-            .current_dir(&pkg.name)
-            .status()?;
+            if !status.success() {
+                eprintln!("git clone failed for {} (mirror).", pkg_name);
+                continue;
+            }
 
-        // Cleanup
-        fs::remove_dir_all(&pkg.name)?;
+            // build options
+            let remove_deps = prompt_yes("Remove make dependencies after build?");
+            let mut args = vec!["-si", "--noconfirm"];
+            if remove_deps {
+                args.push("--rmdeps");
+            }
 
-        if status.success() {
-            println!("Successfully installed {}", pkg.name);
+            let status = Shell::new("makepkg")
+                .args(&args)
+                .current_dir(pkg_name)
+                .status()?;
+
+            // cleanup
+            let _ = fs::remove_dir_all(pkg_name);
+
+            if status.success() {
+                println!("Successfully installed {} 🎉", pkg_name);
+            } else {
+                eprintln!("Failed to install {} (build error).", pkg_name);
+            }
         } else {
-            eprintln!("Failed to install {}", pkg.name);
+            // rpc flow
+            let pkg = match fetch_info(pkg_name) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("failed to fetch info for {}: {}", pkg_name, e);
+                    continue;
+                }
+            };
+
+            println!("\nInstalling: {} {}", pkg.name, pkg.version.as_deref().unwrap_or(""));
+
+            if !prompt_yes("Proceed?") {
+                println!("Skipping {}", pkg.name);
+                continue;
+            }
+
+            // Clone package from AUR
+            let repo_url = format!("https://aur.archlinux.org/{}.git", pkg.name);
+            let status = Shell::new("git").arg("clone").arg(&repo_url).status()?;
+            if !status.success() {
+                eprintln!("git clone failed for {} (aur).", pkg.name);
+                continue;
+            }
+
+            // Build options
+            let remove_deps = prompt_yes("Remove make dependencies after build?");
+            let mut args = vec!["-si", "--noconfirm"];
+            if remove_deps {
+                args.push("--rmdeps");
+            }
+
+            // Build and install
+            let status = Shell::new("makepkg")
+                .args(&args)
+                .current_dir(&pkg.name)
+                .status()?;
+
+            // Cleanup
+            let _ = fs::remove_dir_all(&pkg.name);
+
+            if status.success() {
+                println!("Successfully installed {} 🎉", pkg.name);
+            } else {
+                eprintln!("Failed to install {} (build error).", pkg.name);
+            }
         }
     }
     Ok(())
 }
 
-fn cmd_update() -> Result<(), Box<dyn Error>> {
+fn cmd_update(use_github: bool) -> Result<(), Box<dyn Error>> {
     println!("Updating AUR packages...");
 
-    // Get installed AUR packages
-    let output = Shell::new("pacman")
-        .arg("-Qm")
-        .output()?;
+    // Get installed AUR packages (pacman -Qm)
+    let output = Shell::new("pacman").arg("-Qm").output()?;
 
     let aur_pkgs = String::from_utf8_lossy(&output.stdout);
     let pkgs_to_update: Vec<String> = aur_pkgs
@@ -148,10 +257,22 @@ fn cmd_update() -> Result<(), Box<dyn Error>> {
     }
 
     println!("Found {} packages to update", pkgs_to_update.len());
-    cmd_install(&pkgs_to_update)
+    cmd_install(&pkgs_to_update, use_github)
 }
 
-fn cmd_info(pkg_name: &str) -> Result<(), Box<dyn Error>> {
+fn cmd_info(pkg_name: &str, use_github: bool) -> Result<(), Box<dyn Error>> {
+    if use_github {
+        let branches = fetch_github_packages()?;
+        if !github_package_exists(pkg_name, &branches) {
+            return Err(format!("package '{}' not found on github mirror", pkg_name).into());
+        }
+
+        println!("\nPackage: {} (from github mirror)", pkg_name);
+        println!("  source: {}", GITHUB_AUR_MIRROR);
+        println!("  note: github mirror provides the PKGBUILD/branch but not AUR metadata (maintainer/popularity).");
+        return Ok(());
+    }
+
     let pkg = fetch_info(pkg_name)?;
 
     println!("\nPackage: {}", pkg.name);
@@ -223,8 +344,15 @@ fn cmd_uninstall(pkgs: &[String]) -> Result<(), Box<dyn Error>> {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let matches = Command::new("raur")
-        .version("1.1")
+        .version("1.2")
         .about("Simple AUR Helper")
+        .arg(
+            Arg::new("github")
+                .long("github")
+                .help("Use GitHub mirror instead of AUR RPC (global flag)")
+                .global(true)
+                .action(ArgAction::SetTrue),
+        )
         .subcommand_required(true)
         .subcommand(
             Command::new("search")
@@ -250,9 +378,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         )
         .get_matches();
 
+    let use_github = matches.get_flag("github");
+
     match matches.subcommand() {
         Some(("search", sub_m)) => {
-            cmd_search(sub_m.get_one::<String>("query").unwrap())?;
+            cmd_search(sub_m.get_one::<String>("query").unwrap(), use_github)?;
         }
         Some(("install", sub_m)) => {
             let packages: Vec<String> = sub_m
@@ -260,13 +390,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .unwrap()
                 .cloned()
                 .collect();
-            cmd_install(&packages)?;
+            cmd_install(&packages, use_github)?;
         }
         Some(("update", _)) => {
-            cmd_update()?;
+            cmd_update(use_github)?;
         }
         Some(("info", sub_m)) => {
-            cmd_info(sub_m.get_one::<String>("package").unwrap())?;
+            cmd_info(sub_m.get_one::<String>("package").unwrap(), use_github)?;
         }
         Some(("clean", _)) => {
             cmd_clean()?;
