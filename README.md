@@ -10,7 +10,7 @@ As of now, 7 commands are available:
 
 | Command     | Description                            |
 |-------------|----------------------------------------|
-| `search`    | Searches for AUR package(s             |
+| `search`    | Searches for AUR package(s)            |
 | `install`   | Installs an AUR package                |
 | `update`    | Updates an installed AUR package       |
 | `info`      | Shows information about an AUR package |
