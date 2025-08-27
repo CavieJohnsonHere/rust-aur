@@ -4,7 +4,7 @@ use reqwest::blocking::get;
 use serde::Deserialize;
 use std::error::Error;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::process::Command as Shell;
 
 const AUR_RPC: &str = "https://aur.archlinux.org/rpc/?v=5&";
@@ -372,9 +372,9 @@ fn cmd_info(pkg_name: &str, use_github: bool) -> Result<(), Box<dyn Error>> {
             Some(pkgb) => {
                 if let Some(ver) = parse_pkgbuild_version(&pkgb) {
                     println!("\nPackage: {} (from github mirror)", pkg_name);
-                    println!("  version (from PKGBUILD): {}", ver);
-                    println!("  source: https://github.com/archlinux/aur (branch = pkg name)");
-                    println!("  note: PKGBUILD parsing is naive; some PKGBUILDs compute version dynamically.");
+                    println!("Version (from PKGBUILD): {}", ver);
+                    println!("Source: https://github.com/archlinux/aur (branch = pkg name)");
+                    println!("Note: PKGBUILD parsing is naive; some PKGBUILDs compute version dynamically.");
                     return Ok(());
                 } else {
                     println!("PKGBUILD found but version could not be parsed (dynamic/complex).");
