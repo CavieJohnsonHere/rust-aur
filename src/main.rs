@@ -1,10 +1,10 @@
 // main.rs - Simple AUR Helper
-use clap::{Arg, ArgAction, Command};
+use clap::{ Arg, ArgAction, Command };
 use reqwest::blocking::get;
 use serde::Deserialize;
 use std::error::Error;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{ self, Write };
 use std::process::Command as Shell;
 
 const AUR_RPC: &str = "https://aur.archlinux.org/rpc/?v=5&";
@@ -52,10 +52,7 @@ fn fetch_search(term: &str) -> Result<Vec<AurPkg>, Box<dyn Error>> {
     let resp: RpcResponse = get(&url)?.json()?;
     let mut packages = resp.results;
     packages.sort_by(|a, b| {
-        b.popularity
-            .unwrap_or(0.0)
-            .partial_cmp(&a.popularity.unwrap_or(0.0))
-            .unwrap()
+        b.popularity.unwrap_or(0.0).partial_cmp(&a.popularity.unwrap_or(0.0)).unwrap()
     });
     Ok(packages)
 }
@@ -102,7 +99,10 @@ fn parse_pkgbuild_version(build: &str) -> Option<String> {
             if let Some(idx) = l.find('=') {
                 let mut val = l[idx + 1..].trim();
                 // strip quotes
-                if (val.starts_with('\'') && val.ends_with('\'')) || (val.starts_with('"') && val.ends_with('"')) {
+                if
+                    (val.starts_with('\'') && val.ends_with('\'')) ||
+                    (val.starts_with('"') && val.ends_with('"'))
+                {
                     val = &val[1..val.len() - 1];
                 }
                 // ignore complex assignments (like pkgver=$(git describe ...))
@@ -116,7 +116,10 @@ fn parse_pkgbuild_version(build: &str) -> Option<String> {
         } else if l.starts_with("pkgrel") && l.contains('=') {
             if let Some(idx) = l.find('=') {
                 let mut val = l[idx + 1..].trim();
-                if (val.starts_with('\'') && val.ends_with('\'')) || (val.starts_with('"') && val.ends_with('"')) {
+                if
+                    (val.starts_with('\'') && val.ends_with('\'')) ||
+                    (val.starts_with('"') && val.ends_with('"'))
+                {
                     val = &val[1..val.len() - 1];
                 }
                 if !val.contains('$') && !val.contains('(') {
@@ -170,11 +173,7 @@ fn fetch_github_packages() -> Result<Vec<String>, Box<dyn Error>> {
         .output()?;
 
     if !output.status.success() {
-        return Err(format!(
-            "git ls-remote failed with status: {}",
-            output.status
-        )
-        .into());
+        return Err(format!("git ls-remote failed with status: {}", output.status).into());
     }
 
     let data = String::from_utf8_lossy(&output.stdout);
@@ -193,7 +192,10 @@ fn github_package_exists(pkg: &str, list: &[String]) -> bool {
 // Return true for packages that are debug variants and should be ignored
 fn is_debug_package(name: &str) -> bool {
     let s = name.to_lowercase();
-    s.ends_with("-debug") || s.ends_with("-dbg") || s.ends_with("-dbgsym") || s.ends_with("-debuginfo")
+    s.ends_with("-debug") ||
+        s.ends_with("-dbg") ||
+        s.ends_with("-dbgsym") ||
+        s.ends_with("-debuginfo")
 }
 
 // --- Command implementations ---
@@ -202,7 +204,10 @@ fn cmd_search(term: &str, use_github: bool) -> Result<(), Box<dyn Error>> {
     if use_github {
         println!("searching github mirror for '{}'", term);
         let branches = fetch_github_packages()?;
-        let mut matches: Vec<&String> = branches.iter().filter(|b| b.contains(term)).collect();
+        let mut matches: Vec<&String> = branches
+            .iter()
+            .filter(|b| b.contains(term))
+            .collect();
         matches.sort();
         println!("\nFound {} packages (github mirror):", matches.len());
         for pkg in matches {
@@ -240,7 +245,10 @@ fn cmd_install(pkgs: &[String], use_github: bool) -> Result<(), Box<dyn Error>> 
             }
 
             println!("\nInstalling from github mirror: {}", pkg_name);
-            if !prompt_yes("Proceed?") { println!("Skipping {}", pkg_name); continue; }
+            if !prompt_yes("Proceed?") {
+                println!("Skipping {}", pkg_name);
+                continue;
+            }
 
             let status = Shell::new("git")
                 .arg("clone")
@@ -251,39 +259,61 @@ fn cmd_install(pkgs: &[String], use_github: bool) -> Result<(), Box<dyn Error>> 
                 .arg(pkg_name)
                 .status()?;
 
-            if !status.success() { eprintln!("git clone failed for {} (mirror).", pkg_name); continue; }
+            if !status.success() {
+                eprintln!("git clone failed for {} (mirror).", pkg_name);
+                continue;
+            }
 
             let remove_deps = prompt_yes("Remove make dependencies after build?");
             let mut args = vec!["-si", "--noconfirm"];
-            if remove_deps { args.push("--rmdeps"); }
+            if remove_deps {
+                args.push("--rmdeps");
+            }
 
             let status = Shell::new("makepkg").args(&args).current_dir(pkg_name).status()?;
             let _ = fs::remove_dir_all(pkg_name);
 
-            if status.success() { println!("Successfully installed {}", pkg_name); }
-            else { eprintln!("Failed to install {} (build error).", pkg_name); }
+            if status.success() {
+                println!("Successfully installed {}", pkg_name);
+            } else {
+                eprintln!("Failed to install {} (build error).", pkg_name);
+            }
         } else {
             let pkg = match fetch_info(pkg_name) {
                 Ok(p) => p,
-                Err(e) => { eprintln!("failed to fetch info for {}: {}", pkg_name, e); continue; }
+                Err(e) => {
+                    eprintln!("failed to fetch info for {}: {}", pkg_name, e);
+                    continue;
+                }
             };
 
             println!("\nInstalling: {} {}", pkg.name, pkg.version.as_deref().unwrap_or(""));
-            if !prompt_yes("Proceed?") { println!("Skipping {}", pkg.name); continue; }
+            if !prompt_yes("Proceed?") {
+                println!("Skipping {}", pkg.name);
+                continue;
+            }
 
             let repo_url = format!("https://aur.archlinux.org/{}.git", pkg.name);
             let status = Shell::new("git").arg("clone").arg(&repo_url).status()?;
-            if !status.success() { eprintln!("git clone failed for {} (aur).", pkg.name); continue; }
+            if !status.success() {
+                eprintln!("git clone failed for {} (aur).", pkg.name);
+                continue;
+            }
 
             let remove_deps = prompt_yes("Remove make dependencies after build?");
             let mut args = vec!["-si", "--noconfirm"];
-            if remove_deps { args.push("--rmdeps"); }
+            if remove_deps {
+                args.push("--rmdeps");
+            }
 
             let status = Shell::new("makepkg").args(&args).current_dir(&pkg.name).status()?;
             let _ = fs::remove_dir_all(&pkg.name);
 
-            if status.success() { println!("Successfully installed {}", pkg.name); }
-            else { eprintln!("Failed to install {} (build error).", pkg.name); }
+            if status.success() {
+                println!("Successfully installed {}", pkg.name);
+            } else {
+                eprintln!("Failed to install {} (build error).", pkg.name);
+            }
         }
     }
     Ok(())
@@ -325,7 +355,11 @@ fn cmd_update(use_github: bool) -> Result<(), Box<dyn Error>> {
                     eprintln!("No PKGBUILD found for {} on GitHub mirror; falling back to AUR RPC", name);
                 }
                 Err(e) => {
-                    eprintln!("Error fetching PKGBUILD for {}: {}; falling back to AUR RPC", name, e);
+                    eprintln!(
+                        "Error fetching PKGBUILD for {}: {}; falling back to AUR RPC",
+                        name,
+                        e
+                    );
                 }
             }
             // fallback to RPC if github PKGBUILD missing or unparseable
@@ -374,7 +408,9 @@ fn cmd_info(pkg_name: &str, use_github: bool) -> Result<(), Box<dyn Error>> {
                     println!("\nPackage: {} (from github mirror)", pkg_name);
                     println!("Version (from PKGBUILD): {}", ver);
                     println!("Source: https://github.com/archlinux/aur (branch = pkg name)");
-                    println!("Note: PKGBUILD parsing is naive; some PKGBUILDs compute version dynamically.");
+                    println!(
+                        "Note: PKGBUILD parsing is naive; some PKGBUILDs compute version dynamically."
+                    );
                     return Ok(());
                 } else {
                     println!("PKGBUILD found but version could not be parsed (dynamic/complex).");
@@ -412,7 +448,9 @@ fn cmd_clean() -> Result<(), Box<dyn Error>> {
     println!("Cleaning build directories...");
     for entry in fs::read_dir(".")? {
         let entry = entry?;
-        if !entry.file_type()?.is_dir() { continue; }
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
         let dir_name = entry.file_name().into_string().unwrap();
         let pkgbuild_path = format!("{}/PKGBUILD", dir_name);
         if fs::metadata(pkgbuild_path).is_ok() {
@@ -425,10 +463,16 @@ fn cmd_clean() -> Result<(), Box<dyn Error>> {
 
 fn cmd_uninstall(pkgs: &[String]) -> Result<(), Box<dyn Error>> {
     for pkg in pkgs {
-        if !prompt_yes(&format!("Really uninstall {}?", pkg)) { println!("Skipping {}", pkg); continue; }
+        if !prompt_yes(&format!("Really uninstall {}?", pkg)) {
+            println!("Skipping {}", pkg);
+            continue;
+        }
         let status = Shell::new("sudo").arg("pacman").arg("-Rns").arg(pkg).status()?;
-        if status.success() { println!("Successfully removed {}", pkg); }
-        else { eprintln!("Failed to remove {}", pkg); }
+        if status.success() {
+            println!("Successfully removed {}", pkg);
+        } else {
+            eprintln!("Failed to remove {}", pkg);
+        }
     }
     Ok(())
 }
@@ -442,23 +486,48 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .long("github")
                 .help("Use GitHub mirror instead of AUR RPC (global flag)")
                 .global(true)
-                .action(ArgAction::SetTrue),
+                .action(ArgAction::SetTrue)
         )
         .arg(
             Arg::new("meow")
                 .long("meow")
                 .help("meow (necessary feature)")
                 .global(true)
-                .action(ArgAction::SetTrue),
+                .action(ArgAction::SetTrue)
         )
-        // allow flags like --meow on their own
         .subcommand_required(false)
-        .subcommand(Command::new("search").about("Search AUR packages").arg(Arg::new("query").required(true)))
-        .subcommand(Command::new("install").about("Install AUR packages").arg(Arg::new("packages").required(true).num_args(1..)))
-        .subcommand(Command::new("update").about("Update installed AUR packages"))
-        .subcommand(Command::new("info").about("Show package information").arg(Arg::new("package").required(true)))
+        .subcommand(
+            Command::new("search")
+                .about("Search AUR packages")
+                .arg(Arg::new("query").required(true))
+        )
+        .subcommand(
+            Command::new("install")
+                .about("Install AUR packages")
+                .arg(
+                    Arg::new("packages")
+                        .required(true)
+                        .num_args(1..)
+                )
+                .alias("i")
+        )
+        .subcommand(Command::new("update").about("Update installed AUR packages").alias("u"))
+        .subcommand(
+            Command::new("info")
+                .about("Show package information")
+                .arg(Arg::new("package").required(true))
+        )
         .subcommand(Command::new("clean").about("Clean build directories"))
-        .subcommand(Command::new("uninstall").about("Uninstall AUR packages").arg(Arg::new("packages").required(true).num_args(1..)))
+        .subcommand(
+            Command::new("uninstall")
+                .about("Uninstall AUR packages")
+                .arg(
+                    Arg::new("packages")
+                        .required(true)
+                        .num_args(1..)
+                )
+                .alias("r")
+        )
         .get_matches();
 
     if matches.get_flag("meow") {
@@ -475,20 +544,28 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     match matches.subcommand() {
-        Some(("search", sub_m)) => cmd_search(sub_m.get_one::<String>("query").unwrap(), use_github)?,
+        Some(("search", sub_m)) =>
+            cmd_search(sub_m.get_one::<String>("query").unwrap(), use_github)?,
         Some(("install", sub_m)) => {
-            let packages: Vec<String> = sub_m.get_many::<String>("packages").unwrap().cloned().collect();
+            let packages: Vec<String> = sub_m
+                .get_many::<String>("packages")
+                .unwrap()
+                .cloned()
+                .collect();
             cmd_install(&packages, use_github)?;
         }
         Some(("update", _)) => cmd_update(use_github)?,
         Some(("info", sub_m)) => cmd_info(sub_m.get_one::<String>("package").unwrap(), use_github)?,
         Some(("clean", _)) => cmd_clean()?,
         Some(("uninstall", sub_m)) => {
-            let packages: Vec<String> = sub_m.get_many::<String>("packages").unwrap().cloned().collect();
+            let packages: Vec<String> = sub_m
+                .get_many::<String>("packages")
+                .unwrap()
+                .cloned()
+                .collect();
             cmd_uninstall(&packages)?;
         }
         _ => unreachable!(),
     }
     Ok(())
 }
-
