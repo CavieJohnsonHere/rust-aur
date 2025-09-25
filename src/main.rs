@@ -451,14 +451,26 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .global(true)
                 .action(ArgAction::SetTrue),
         )
-        // allow flags like --meow on their own
         .subcommand_required(false)
-        .subcommand(Command::new("search").about("Search AUR packages").arg(Arg::new("query").required(true)))
-        .subcommand(Command::new("install").about("Install AUR packages").arg(Arg::new("packages").required(true).num_args(1..)))
-        .subcommand(Command::new("update").about("Update installed AUR packages"))
-        .subcommand(Command::new("info").about("Show package information").arg(Arg::new("package").required(true)))
-        .subcommand(Command::new("clean").about("Clean build directories"))
-        .subcommand(Command::new("uninstall").about("Uninstall AUR packages").arg(Arg::new("packages").required(true).num_args(1..)))
+        .subcommand(Command::new("search")
+            .about("Search AUR packages")
+            .arg(Arg::new("query").required(true)))
+        .subcommand(Command::new("install")
+            .about("Install AUR packages")
+            .arg(Arg::new("packages").required(true).num_args(1..))
+            .alias("i"))
+        .subcommand(Command::new("update")
+            .about("Update installed AUR packages")
+            .alias("u"))
+        .subcommand(Command::new("info")
+            .about("Show package information")
+            .arg(Arg::new("package").required(true)))
+        .subcommand(Command::new("clean")
+            .about("Clean build directories"))
+        .subcommand(Command::new("uninstall")
+            .about("Uninstall AUR packages")
+            .arg(Arg::new("packages").required(true).num_args(1..))
+            .alias("r"))
         .get_matches();
 
     if matches.get_flag("meow") {
