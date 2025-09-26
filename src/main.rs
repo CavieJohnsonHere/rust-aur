@@ -47,9 +47,9 @@ fn prompt_yes(question: &str) -> bool {
     io::stdin().read_line(&mut input).unwrap();
     let resp = input.trim().to_lowercase();
 
-    if (YES_OPTIONS.contains(&resp.as_str())) {
+    if YES_OPTIONS.contains(&resp.as_str()) {
         return true;
-    } else if (NO_OPTIONS.contains(&resp.as_str())) {
+    } else if NO_OPTIONS.contains(&resp.as_str()) {
         return false;
     } else {
         return prompt_yes(question);
