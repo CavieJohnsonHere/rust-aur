@@ -5,7 +5,10 @@ use serde::Deserialize;
 use std::error::Error;
 use std::fs;
 use std::io::{ self, Write };
-use std::process::Command as Shell;
+use std::process::{ exit, Command as Shell };
+extern crate nix;
+
+use nix::unistd::Uid;
 
 const AUR_RPC: &str = "https://aur.archlinux.org/rpc/?v=5&";
 const GITHUB_AUR_MIRROR_RAW_BASE: &str = "https://raw.githubusercontent.com/archlinux/aur";
@@ -495,6 +498,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .global(true)
                 .action(ArgAction::SetTrue)
         )
+        .arg(
+            Arg::new("bypass-sudo")
+                .long("bypass-sudo")
+                .help("Bypass root verification (not recommended)")
+                .global(true)
+                .action(ArgAction::SetTrue)
+        )
         .subcommand_required(false)
         .subcommand(
             Command::new("search")
@@ -533,6 +543,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     if matches.get_flag("meow") {
         println!("meow (necessary feature)");
         return Ok(());
+    }
+
+    // Check is user is root         Check if a bypass flag was provided
+    if Uid::effective().is_root() && !matches.get_flag("bypass-sudo") {
+        println!(
+            "Running this program with root privileges is not supported. Use --bypass-sudo to use bypass this."
+        );
+        exit(1);
     }
 
     let use_github = matches.get_flag("github");
