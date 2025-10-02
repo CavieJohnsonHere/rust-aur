@@ -486,7 +486,7 @@ fn cmd_uninstall(pkgs: &[String], bypass: &bool) -> Result<(), Box<dyn Error>> {
 
 fn check_root(bypass: &bool) {
     // Check is user is root         Check if a bypass flag was provided
-    if Uid::effective().is_root() && *bypass {
+    if Uid::effective().is_root() && !*bypass {
         println!(
             "Running this program with root privileges is not supported. Use --bypass-sudo to use bypass this."
         );
